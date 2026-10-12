@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Voice Web Agent</title>
+<style>
+:root{--bg:#f7f7fb;--card:#fff;--text:#1c1b29;--muted:#6b6a80;--border:#e3e2ee;--accent:#4f46e5;--danger:#d93a3a;--ok:#16a34a;--code:#14131f;--codet:#e8e6ff}
+@media (prefers-color-scheme:dark){:root{--bg:#12111a;--card:#1c1b29;--text:#efeefa;--muted:#9a98b3;--border:#2f2d45;--accent:#7c75ff;--danger:#ff6b6b;--ok:#4ade80;--code:#0b0a12}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,"Noto Sans Devanagari",sans-serif;line-height:1.5;padding:env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0)}
+main{max-width:720px;margin:0 auto;padding:14px}
+h1{font-size:1.25rem;margin:4px 0 12px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px;margin-bottom:12px}
+label{display:block;font-size:.78rem;color:var(--muted);margin:8px 0 4px}
+input,select,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font:inherit;font-size:.95rem}
+textarea{resize:vertical}
+.btn{padding:11px 14px;border-radius:10px;border:none;background:var(--accent);color:#fff;font:inherit;font-weight:600}
+.btn.sec{background:transparent;color:var(--text);border:1px solid var(--border)}
+.btn:disabled{opacity:.5}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row>*{flex:1}
+details summary{font-weight:600;cursor:pointer}
+#mic{width:76px;height:76px;border-radius:50%;border:none;background:var(--accent);color:#fff;font-size:1.8rem;flex:none}
+#mic.rec{background:var(--danger)}
+.center{display:flex;flex-direction:column;align-items:center;gap:6px;margin:8px 0}
+.small{font-size:.8rem;color:var(--muted)}
+pre{background:var(--code);color:var(--codet);padding:10px;border-radius:10px;overflow:auto;max-height:320px;font-size:.78rem;margin:8px 0}
+iframe{width:100%;height:360px;border:1px solid var(--border);border-radius:10px;background:#fff}
+.msg{font-size:.9rem;margin:6px 0}
+.err{color:var(--danger)} .good{color:var(--ok)}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main>
+<h1>🎙️ Voice Web Agent</h1>
+
+<details class="card" id="settings" open>
+  <summary>⚙️ Settings (एक बार भरो)</summary>
+  <label>Gemini API key (aistudio.google.com से free)</label>
+  <input id="gkey" type="password" autocomplete="off" placeholder="AIza...">
+  <label>Gemini model</label>
+  <input id="gmodel" value="gemini-2.5-flash">
+  <label>GitHub token (repo की Contents: Read & write permission)</label>
+  <input id="ghtoken" type="password" autocomplete="off" placeholder="github_pat_...">
+  <label>GitHub repo (owner/naam)</label>
+  <input id="repo" placeholder="rahul/meri-website">
+  <label>Branch</label>
+  <input id="branch" value="main">
+  <div class="row" style="margin-top:10px">
+    <button class="btn" id="saveSet" type="button">Save करो</button>
+    <button class="btn sec" id="loadFiles" type="button">Files लाओ</button>
+  </div>
+  <div class="small" style="margin-top:6px">Key और token सिर्फ इसी फ़ोन में रहते हैं।</div>
+</details>
+
+<div class="card">
+  <label>कौन सी file बदलनी है</label>
+  <select id="fileSel"><option value="">पहले "Files लाओ" दबाओ</option></select>
+
+  <label>आपका command (बोलो या लिखो)</label>
+  <textarea id="cmd" rows="3" placeholder="जैसे: header का रंग नीला कर दो और एक contact बटन जोड़ो"></textarea>
+  <div class="center">
+    <button id="mic" type="button" aria-label="बोलो">🎤</button>
+    <div id="micStatus" class="small">mic दबाओ और हिंदी में बोलो</div>
+  </div>
+  <button class="btn" id="go" type="button" style="width:100%">⚡ बदलाव बनाओ</button>
+  <div id="msg" class="msg"></div>
+</div>
+
+<div id="result" class="card hidden">
+  <strong>नया code</strong>
+  <div id="summary" class="msg"></div>
+  <pre id="newCode"></pre>
+  <button class="btn sec" id="togglePrev" type="button" style="width:100%;margin-bottom:8px">👁️ Preview देखो</button>
+  <iframe id="prev" class="hidden" sandbox="allow-scripts"></iframe>
+  <div class="row" style="margin-top:8px">
+    <button class="btn" id="publish" type="button">✅ GitHub पर save करो</button>
+    <button class="btn sec" id="discard" type="button">❌ रद्द करो</button>
+  </div>
+</div>
+
+<div id="undoBox" class="card hidden">
+  <div class="small">पिछला save गलत लगा?</div>
+  <button class="btn sec" id="undo" type="button" style="width:100%;margin-top:6px">↩️ पिछला version वापस लाओ</button>
+</div>
+</main>
+
+<script>
+(function(){
+  var $ = function(id){return document.getElementById(id)};
+  var state = { path:'', sha:'', oldText:'', newText:'', undo:null };
+  var FIELDS = ['gkey','gmodel','ghtoken','repo','branch'];
+
+  function load(){ try{ FIELDS.forEach(function(f){ var v = localStorage.getItem('vwa_'+f); if(v) $(f).value = v; }); }catch(e){} }
+  function save(){ try{ FIELDS.forEach(function(f){ localStorage.setItem('vwa_'+f, $(f).value.trim()); }); }catch(e){} }
+  load();
+  if($('gkey').value && $('ghtoken').value && $('repo').value) $('settings').open = false;
+  $('saveSet').onclick = function(){ save(); say('Settings save हो गईं ✓','good'); };
+  function say(t,cls){ var m=$('msg'); m.textContent=t||''; m.className='msg '+(cls||''); }
+
+  function b64decode(b){ var bin=atob(b.replace(/\n/g,'')); var u=new Uint8Array(bin.length); for(var i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i); return new TextDecoder().decode(u); }
+  function b64encode(s){ var u=new TextEncoder().encode(s), bin='', c=0x8000; for(var i=0;i<u.length;i+=c) bin+=String.fromCharCode.apply(null,u.subarray(i,i+c)); return btoa(bin); }
+
+  function gh(path, opts){
+    opts = opts || {};
+    opts.headers = Object.assign({ 'Authorization':'Bearer '+$('ghtoken').value.trim(), 'Accept':'application/vnd.github+json' }, opts.headers||{});
+    return fetch('https://api.github.com/repos/'+$('repo').value.trim()+path, opts).then(function(r){
+      return r.json().then(function(j){ if(!r.ok) throw new Error('GitHub: '+(j.message||r.status)); return j; });
+    });
+  }
+  var TEXT = /\.(html?|css|js|jsx|ts|tsx|json|md|txt|php|py|xml|svg|vue)$/i;
+
+  $('loadFiles').onclick = function(){
+    save(); say('Files ला रहा हूँ...');
+    gh('/git/trees/'+encodeURIComponent($('branch').value.trim())+'?recursive=1').then(function(j){
+      var files = j.tree.filter(function(t){return t.type==='blob' && TEXT.test(t.path) && t.path.indexOf('node_modules/')!==0});
+      var sel = $('fileSel'); sel.innerHTML='';
+      files.forEach(function(f){ var o=document.createElement('option'); o.value=f.path; o.textContent=f.path; sel.appendChild(o); });
+      var idx = files.map(function(f){return f.path}).indexOf('index.html'); if(idx>=0) sel.selectedIndex = idx;
+      say(files.length+' files मिलीं ✓','good');
+    }).catch(function(e){ say(e.message,'err'); });
+  };
+
+  var SRP = (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SpeechRecognition) || null;
+  var WebSR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var listening=false, base='', webRec=null;
+  function mstat(t){ $('micStatus').textContent=t; }
+  function setRec(on){ listening=on; $('mic').classList.toggle('rec',on); }
+
+  $('mic').onclick = async function(){
+    if(listening){ try{ SRP ? await SRP.stop() : webRec.stop(); }catch(e){} setRec(false); mstat('हो गया'); return; }
+    base = $('cmd').value ? $('cmd').value.trim()+' ' : '';
+    try{
+      if(SRP){
+        var p = await SRP.requestPermissions();
+        if(p.speechRecognition !== 'granted'){ mstat('mic की permission दो'); return; }
+        await SRP.removeAllListeners();
+        await SRP.addListener('partialResults', function(d){ $('cmd').value = base + ((d.matches&&d.matches[0])||''); });
+        await SRP.addListener('listeningState', function(d){ if(d.status==='stopped'){ setRec(false); mstat('हो गया'); } });
+        setRec(true); mstat('सुन रहा हूँ...');
+        await SRP.start({ language:'hi-IN', maxResults:1, partialResults:true, popup:false });
+      } else if(WebSR){
+        webRec = new WebSR(); webRec.lang='hi-IN'; webRec.interimResults=true;
+        webRec.onresult = function(e){ var t=''; for(var i=0;i<e.results.length;i++) t+=e.results[i][0].transcript; $('cmd').value = base+t; };
+        webRec.onend = function(){ setRec(false); mstat('हो गया'); };
+        webRec.onerror = function(e){ mstat('mic error: '+e.error); };
+        setRec(true); mstat('सुन रहा हूँ...'); webRec.start();
+      } else { mstat('mic support नहीं है, keyboard का voice typing use करो'); }
+    }catch(e){ setRec(false); mstat('mic शुरू नहीं हुआ: '+(e.message||e)); }
+  };
+
+  function gemini(prompt){
+    var model = $('gmodel').value.trim() || 'gemini-2.5-flash';
+    return fetch('https://generativelanguage.googleapis.com/v1beta/models/'+encodeURIComponent(model)+':generateContent', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'x-goog-api-key': $('gkey').value.trim() },
+      body: JSON.stringify({ contents:[{ role:'user', parts:[{ text: prompt }] }] })
+    }).then(function(r){ return r.json().then(function(j){
+      if(!r.ok) throw new Error('Gemini: '+((j.error&&j.error.message)||r.status));
+      var parts = (j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[];
+      var t = parts.map(function(p){return p.text||''}).join('');
+      if(!t) throw new Error('Gemini ने खाली जवाब दिया');
+      return t;
+    }); });
+  }
+
+  function parse(text){
+    var a = text.indexOf('```');
+    var b = text.lastIndexOf('```');
+    if(a<0 || b<=a) return { code:text.trim(), summary:'' };
+    var nl = text.indexOf('\n', a);
+    var code = text.slice(nl+1, b).replace(/\s+$/,'');
+    var summary = text.slice(b+3).replace(/^\s*सारांश\s*[:：]?\s*/,'').trim();
+    return { code:code, summary:summary };
+  }
+
+  $('go').onclick = function(){
+    save(); say('');
+    var path = $('fileSel').value, cmd = $('cmd').value.trim();
+    if(!$('gkey').value.trim()||!$('ghtoken').value.trim()||!$('repo').value.trim()){ say('पहले Settings भरो','err'); return; }
+    if(!path){ say('पहले file चुनो','err'); return; }
+    if(!cmd){ say('command बोलो या लिखो','err'); return; }
+    var btn=$('go'); btn.disabled=true; btn.textContent='⏳ सोच रहा हूँ...';
+    gh('/contents/'+path.split('/').map(encodeURIComponent).join('/')+'?ref='+encodeURIComponent($('branch').value.trim()))
+    .then(function(f){
+      state.path=path; state.sha=f.sha; state.oldText=b64decode(f.content);
+      var prompt = 'तुम एक expert web developer agent हो। यूज़र हिंदी में बोलकर अपनी website की file बदलने को कहता है।\n'+
+        'File: '+path+'\n\nयूज़र का command: '+cmd+'\n\n'+
+        'नीचे मौजूदा पूरी file है। command के हिसाब से बदलाव करो, बाकी code जैसा है वैसा रखो।\n'+
+        'Format सख्ती से: पहले एक fenced code block जिसमें बदली हुई PURI file हो (कुछ हिस्सा छोड़ना मत), '+
+        'फिर "सारांश:" लिखकर आसान हिंदी (देवनागरी) में 1-3 लाइन में बताओ क्या बदला। और कुछ मत जोड़ो।\n\n'+
+        '```\n'+state.oldText+'\n```';
+      return gemini(prompt);
+    }).then(function(t){
+      var r = parse(t); state.newText = r.code;
+      $('newCode').textContent = r.code; $('summary').textContent = r.summary || '';
+      $('result').classList.remove('hidden'); $('prev').classList.add('hidden');
+      say('तैयार ✓ — देखो और save करो','good');
+      $('result').scrollIntoView({behavior:'smooth'});
+    }).catch(function(e){ say(e.message,'err'); })
+    .then(function(){ btn.disabled=false; btn.textContent='⚡ बदलाव बनाओ'; });
+  };
+
+  $('togglePrev').onclick = function(){
+    var p=$('prev');
+    if(p.classList.contains('hidden')){
+      if(/\.html?$/i.test(state.path)){ p.srcdoc = state.newText; }
+      else { p.srcdoc = '<p style="font-family:sans-serif;padding:12px">Preview सिर्फ .html file का दिखता है।</p>'; }
+      p.classList.remove('hidden');
+    } else p.classList.add('hidden');
+  };
+
+  function put(path, text, sha, message){
+    return gh('/contents/'+path.split('/').map(encodeURIComponent).join('/'), {
+      method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ message:message, content:b64encode(text), sha:sha, branch:$('branch').value.trim() })
+    });
+  }
+
+  $('publish').onclick = function(){
+    if(!state.newText) return;
+    var btn=$('publish'); btn.disabled=true; say('GitHub पर save कर रहा हूँ...');
+    put(state.path, state.newText, state.sha, 'Voice Web Agent: '+($('cmd').value.trim().slice(0,60)||'update')).then(function(j){
+      state.undo = { path:state.path, text:state.oldText, sha:j.content.sha };
+      $('undoBox').classList.remove('hidden');
+      $('result').classList.add('hidden');
+      say('Save हो गया ✓ — website कुछ मिनट में update हो जाएगी।','good');
+    }).catch(function(e){ say(e.message,'err'); }).then(function(){ btn.disabled=false; });
+  };
+  $('discard').onclick = function(){ $('result').classList.add('hidden'); state.newText=''; say(''); };
+
+  $('undo').onclick = function(){
+    if(!state.undo) return; say('वापस ला रहा हूँ...');
+    put(state.undo.path, state.undo.text, state.undo.sha, 'Voice Web Agent: undo').then(function(){
+      state.undo=null; $('undoBox').classList.add('hidden'); say('पिछला version वापस आ गया ✓','good');
+    }).catch(function(e){ say(e.message,'err'); });
+  };
+})();
+</script>
+</body>
+  </html>
